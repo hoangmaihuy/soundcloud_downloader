@@ -1,2 +1,2 @@
-# soundcloud-downloader
+# SoundCloud Downloader
 SoundCloud Music Downloader
