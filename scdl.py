@@ -5,7 +5,8 @@ import eyed3
 import re
 import argparse
 import json
-from multiprocessing import Pool
+from multiprocessing.dummy import Pool
+import datetime
 
 CONFIG_PATH = './configs.json'
 
@@ -15,6 +16,12 @@ class SoundCloudClient(object):
         self.save_dir = save_dir
         if not os.path.exists(save_dir):
             os.mkdir(save_dir)
+        self.logs_path = os.path.join(save_dir, 'logs.json')
+        if os.path.exists(self.logs_path):
+            with open(self.logs_path, 'r') as f:
+                self.logs = json.load(f)
+        else:
+            self.logs = {}
 
     @staticmethod
     def detect_url(url):
@@ -75,7 +82,10 @@ class SoundCloudClient(object):
         return requests.get(artwork_url).content
 
     def add_mp3_tags(self, track_path, track_info):
-        mp3 = eyed3.load(track_path)
+        try:
+            mp3 = eyed3.load(track_path)
+        except Exception as e:
+            print(e)
         if not mp3.tag:
             mp3.initTag()
         mp3.tag.title = track_info['title']
@@ -86,11 +96,20 @@ class SoundCloudClient(object):
             mp3.tag.images.set(3, img, "image/jpeg" ,u"SoundCloud")
         mp3.tag.save()
 
+    def normalize_filename(self, filename):
+        avoid_chars = r'[|?\\/*=":]'
+        return re.sub(avoid_chars, '', filename)
+
     def download_track_by_id(self, track_id):
+        if track_id in self.logs:
+            track_path = self.logs[track_id]['path']
+            if os.path.exists(track_path):
+                return
         track_info = self.get_track_info(track_id)
         if not track_info:
             return
-        track_name = os.path.join(track_info['title'] + '.mp3').replace('/', '')
+        track_name = os.path.join(track_info['title'] + '.mp3')
+        track_name = self.normalize_filename(track_name)
         download_url = self.get_download_url(track_info['stream_url'])
         response = requests.get(download_url)
         track_path = os.path.join(self.save_dir, track_name)
@@ -101,6 +120,13 @@ class SoundCloudClient(object):
             print(e)
         self.add_mp3_tags(track_path, track_info)
         print("Downloaded " + track_info['title'])
+        self.logs[track_id] = {
+            'track_id': track_id,
+            'title': track_info['title'],
+            'artist': track_info['artist'],
+            'url': download_url,
+            'path': track_path
+            }
 
     def download_track_by_url(self, track_url):
         track_id = self.convert_url_to_id(track_url)
@@ -122,6 +148,11 @@ class SoundCloudClient(object):
             self.download_track_by_url(url)
         elif url_info['type'] == 'playlists':
             self.download_playlist_by_url(url)
+        self.write_logs()
+
+    def write_logs(self):
+        with open(self.logs_path, 'w') as f:
+            json.dump(self.logs, f)
         
 def load_config():
     with open(CONFIG_PATH, 'r') as f:
@@ -132,8 +163,14 @@ if __name__ == '__main__':
     configs = load_config()
     parser = argparse.ArgumentParser()
     parser.add_argument('url', type=str, help="Download URL")
-    parser.add_argument('-d', '--dir', action='store', default=configs['default_save_dir'],help="Save tracks location")
-    parser.add_argument('--client-id', action='store', default=configs['client_id'], help="Client ID of SoundCloud user")
+    parser.add_argument('-d', '--dir', 
+        action='store', 
+        default=configs['default_save_dir'], 
+        help="Save tracks location"
+    )
+    parser.add_argument('--client-id', action='store', 
+        default=configs['client_id'], help="Client ID of SoundCloud user"
+    )
     args = parser.parse_args()
     client = SoundCloudClient(args.client_id, args.dir)
     client.download(args.url)
